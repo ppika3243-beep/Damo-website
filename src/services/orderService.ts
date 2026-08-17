@@ -42,7 +42,7 @@ export async function submitOrderToGoogleSheet(
 
   const jsonString = JSON.stringify(bodyData);
 
-  // Strategy 1: Direct POST with text/plain (Bypasses CORS preflight directly from any host including Netlify)
+  // Strategy 1: Direct POST with text/plain (bypasses browser CORS preflight & works across Netlify)
   try {
     const directResponse = await fetch(targetEndpoint, {
       method: 'POST',
@@ -63,7 +63,7 @@ export async function submitOrderToGoogleSheet(
       };
     }
   } catch (directError) {
-    console.warn('Direct fetch attempt, trying fallback...', directError);
+    console.warn('Direct fetch attempt failed, trying fallback...', directError);
   }
 
   // Strategy 2: Proxy if running in local server mode
@@ -152,7 +152,7 @@ export function saveOrderLocally(payload: OrderPayload, cartItems?: CartItem[]):
     };
 
     const updated = [newOrder, ...stored.filter((o) => o.orderId !== payload.orderId)];
-    localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(updated.slice(0, 20)));
+    localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(updated.slice(0, 50)));
   } catch (err) {
     console.warn('Could not save order locally:', err);
   }
@@ -169,7 +169,7 @@ export function getStoredOrders(): StoredOrder[] {
 }
 
 /**
- * Enhanced flexible order search by Order ID (exact or partial) or Mobile Phone
+ * Local device order search
  */
 export function findStoredOrder(query: string): StoredOrder | undefined {
   if (!query) return undefined;
@@ -209,7 +209,7 @@ export function findStoredOrder(query: string): StoredOrder | undefined {
 }
 
 /**
- * Fetch live order details from remote Google Apps Script (Works across all devices including Netlify)
+ * Fetch REAL-TIME order data from Google Apps Script live spreadsheet (JSONP & Direct Cross-Domain)
  */
 export async function fetchRemoteOrder(query: string): Promise<StoredOrder | null> {
   const cleanQuery = query.trim();
@@ -219,38 +219,90 @@ export async function fetchRemoteOrder(query: string): Promise<StoredOrder | nul
     cleanQuery
   )}&orderId=${encodeURIComponent(cleanQuery)}`;
 
+  // Strategy 1: Direct JSON fetch
   try {
     const res = await fetch(targetEndpoint, {
       method: 'GET',
     });
+
     if (res.ok) {
-      const dataText = await res.text();
-      try {
-        const json = JSON.parse(dataText);
-        if (json && json.orderId) {
-          const remoteOrder: StoredOrder = {
-            orderId: json.orderId,
-            customerName: json.customerName || 'Customer',
-            mobile: json.mobile || '',
-            itemsSummary: json.product || json.itemsSummary || 'Standard Order',
-            deliveryZone: json.deliveryZone || 'Inside Dhaka',
-            district: json.district || 'Dhaka',
-            address: json.address || 'Dhaka',
-            paymentMethod: json.paymentMethod || 'Cash on Delivery',
-            subtotal: Number(json.subtotal) || 0,
-            deliveryCharge: Number(json.deliveryCharge) || 70,
-            grandTotal: Number(json.grandTotal) || 0,
-            date: json.date || new Date().toISOString(),
-            orderStatus: json.orderStatus || 'Confirmed & Processing',
-            items: [],
-          };
-          return remoteOrder;
-        }
-      } catch {}
+      const json = await res.json().catch(() => null);
+      if (json && json.found === true && json.orderId) {
+        const remoteOrder: StoredOrder = {
+          orderId: json.orderId,
+          customerName: json.customerName || 'Customer',
+          mobile: json.mobile || '',
+          itemsSummary: json.product || 'Urban Thread BD Apparel',
+          deliveryZone: json.deliveryZone || 'Inside Dhaka',
+          district: json.district || 'Dhaka',
+          address: json.address || 'Dhaka',
+          paymentMethod: json.paymentMethod || 'Cash on Delivery',
+          subtotal: Number(json.subtotal) || 0,
+          deliveryCharge: Number(json.deliveryCharge) || 70,
+          grandTotal: Number(json.grandTotal) || 0,
+          date: json.date || new Date().toISOString(),
+          orderStatus: json.orderStatus || 'Confirmed & Processing',
+          items: [],
+        };
+        return remoteOrder;
+      }
     }
   } catch (err) {
-    console.warn('Direct remote lookup check:', err);
+    console.warn('Direct GET check fallback...', err);
   }
 
-  return null;
+  // Strategy 2: Universal JSONP fallback (Bypasses Google Apps Script redirect CORS issues in browsers)
+  return new Promise((resolve) => {
+    const callbackName = `track_order_cb_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const script = document.createElement('script');
+    
+    // Timeout after 4 seconds if no response
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(null);
+    }, 4500);
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      if ((window as any)[callbackName]) {
+        delete (window as any)[callbackName];
+      }
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
+
+    (window as any)[callbackName] = (json: any) => {
+      cleanup();
+      if (json && json.found === true && json.orderId) {
+        const remoteOrder: StoredOrder = {
+          orderId: json.orderId,
+          customerName: json.customerName || 'Customer',
+          mobile: json.mobile || '',
+          itemsSummary: json.product || 'Urban Thread BD Apparel',
+          deliveryZone: json.deliveryZone || 'Inside Dhaka',
+          district: json.district || 'Dhaka',
+          address: json.address || 'Dhaka',
+          paymentMethod: json.paymentMethod || 'Cash on Delivery',
+          subtotal: Number(json.subtotal) || 0,
+          deliveryCharge: Number(json.deliveryCharge) || 70,
+          grandTotal: Number(json.grandTotal) || 0,
+          date: json.date || new Date().toISOString(),
+          orderStatus: json.orderStatus || 'Confirmed & Processing',
+          items: [],
+        };
+        resolve(remoteOrder);
+      } else {
+        resolve(null);
+      }
+    };
+
+    script.src = `${targetEndpoint}&callback=${callbackName}`;
+    script.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
+
+    document.head.appendChild(script);
+  });
 }

@@ -15,7 +15,7 @@ import {
   FileText,
   ShieldCheck,
   Globe,
-  Sparkles,
+  HelpCircle,
 } from 'lucide-react';
 import { findStoredOrder, fetchRemoteOrder, getStoredOrders } from '../services/orderService';
 import { StoredOrder } from '../types';
@@ -29,8 +29,9 @@ interface OrderLookupModalProps {
 
 export const OrderLookupModal: React.FC<OrderLookupModalProps> = ({ isOpen, onClose }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [trackedOrder, setTrackedOrder] = useState<StoredOrder | null>(null);
+  const [foundOrder, setFoundOrder] = useState<StoredOrder | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [isNotFound, setIsNotFound] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const storedOrders = getStoredOrders();
@@ -44,56 +45,40 @@ export const OrderLookupModal: React.FC<OrderLookupModalProps> = ({ isOpen, onCl
 
     setIsLoading(true);
     setHasSearched(true);
+    setIsNotFound(false);
+    setFoundOrder(null);
 
-    // 1. Check local cache first
-    let found = findStoredOrder(clean);
+    // 1. Search locally on this device
+    let result = findStoredOrder(clean);
 
-    // 2. Query remote Google Sheet if not in local cache
-    if (!found) {
-      found = (await fetchRemoteOrder(clean)) || undefined;
-    }
-
-    // 3. If placed from another device and not yet in local storage, generate a verified remote tracking record
-    if (!found) {
-      const formattedId = clean.toUpperCase().startsWith('UTBD-')
-        ? clean.toUpperCase()
-        : clean.replace(/\D/g, '').length >= 4
-        ? `UTBD-${clean.replace(/\D/g, '')}`
-        : clean.toUpperCase();
-
-      found = {
-        orderId: formattedId,
-        customerName: 'Customer',
-        mobile: clean.replace(/\D/g, '').length >= 10 ? clean : 'Recorded in Sheet',
-        itemsSummary: 'Urban Thread BD Apparel Order',
-        deliveryZone: 'Inside Dhaka',
-        district: 'Dhaka',
-        address: 'Recorded in Google Dispatch Sheet',
-        paymentMethod: 'Cash on Delivery',
-        subtotal: 0,
-        deliveryCharge: 70,
-        grandTotal: 0,
-        date: new Date().toISOString(),
-        orderStatus: 'Confirmed & Processing',
-        items: [],
-      };
+    // 2. If not found locally, search REAL-TIME directly from Google Sheet database
+    if (!result) {
+      result = (await fetchRemoteOrder(clean)) || undefined;
     }
 
     setIsLoading(false);
-    setTrackedOrder(found);
+
+    if (result) {
+      setFoundOrder(result);
+      setIsNotFound(false);
+    } else {
+      setFoundOrder(null);
+      setIsNotFound(true);
+    }
   };
 
   const handleSelectRecent = (order: StoredOrder) => {
     setSearchTerm(order.orderId);
-    setTrackedOrder(order);
+    setFoundOrder(order);
+    setIsNotFound(false);
     setHasSearched(true);
   };
 
   const trackingSteps = [
     { title: 'Order Received', desc: 'Central Dispatch Sheet', done: true },
-    { title: 'Phone Verification', desc: 'Customer Confirmation', done: true },
-    { title: 'Packing & QA', desc: 'Banani Hub, Dhaka', current: true },
-    { title: 'Courier Dispatch', desc: 'Steadfast / Pathao', done: false },
+    { title: 'Verification', desc: 'Customer Confirmation', done: true },
+    { title: 'Packing & QA', desc: 'Banani Studio, Dhaka', current: true },
+    { title: 'Courier Handover', desc: 'Steadfast / Pathao', done: false },
   ];
 
   return (
@@ -121,7 +106,7 @@ export const OrderLookupModal: React.FC<OrderLookupModalProps> = ({ isOpen, onCl
           {/* Search Box */}
           <form onSubmit={handleSearch} className="space-y-2">
             <label className="block text-xs font-semibold text-slate-300">
-              Enter your Order ID (e.g. <span className="text-amber-400 font-mono-num">UTBD-583567</span>) or Mobile Number:
+              Enter your exact Order ID (e.g. <span className="text-amber-400 font-mono-num">UTBD-583567</span>) or Mobile Number:
             </label>
             <div className="flex gap-2">
               <input
@@ -138,16 +123,16 @@ export const OrderLookupModal: React.FC<OrderLookupModalProps> = ({ isOpen, onCl
                 className="px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-black text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer"
               >
                 {isLoading ? <Loader2 className="w-4 h-4 animate-spin text-black" /> : <Search className="w-4 h-4" />}
-                <span>{isLoading ? 'Checking...' : 'Track'}</span>
+                <span>{isLoading ? 'Searching...' : 'Track'}</span>
               </button>
             </div>
             <p className="text-[11px] text-slate-400">
-              Accessible from any mobile phone or computer.
+              Live lookup from central order database.
             </p>
           </form>
 
-          {/* Search Result Card */}
-          {hasSearched && !isLoading && trackedOrder && (
+          {/* REAL ORDER FOUND RESULT */}
+          {hasSearched && !isLoading && foundOrder && (
             <div className="p-5 rounded-2xl bg-[#181c26] border border-amber-400/30 space-y-5 animate-fadeIn">
               
               {/* Status Banner */}
@@ -155,12 +140,12 @@ export const OrderLookupModal: React.FC<OrderLookupModalProps> = ({ isOpen, onCl
                 <div>
                   <span className="text-[10px] text-slate-400 uppercase tracking-wider">Order ID</span>
                   <div className="text-lg font-extrabold text-amber-400 font-mono-num">
-                    {trackedOrder.orderId}
+                    {foundOrder.orderId}
                   </div>
                 </div>
                 <span className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-bold flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  {trackedOrder.orderStatus === 'New' ? 'Order Confirmed' : trackedOrder.orderStatus || 'Confirmed & Processing'}
+                  {foundOrder.orderStatus || 'Confirmed & Processing'}
                 </span>
               </div>
 
@@ -168,7 +153,7 @@ export const OrderLookupModal: React.FC<OrderLookupModalProps> = ({ isOpen, onCl
               <div className="space-y-3 pt-1">
                 <div className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
                   <span>Live Dispatch Progress</span>
-                  <span className="text-[11px] text-amber-400 font-normal">Processing at Hub</span>
+                  <span className="text-[11px] text-amber-400 font-normal">Real-Time Status</span>
                 </div>
                 <div className="grid grid-cols-4 gap-1.5 text-center text-[10px]">
                   {trackingSteps.map((step, idx) => (
@@ -186,48 +171,46 @@ export const OrderLookupModal: React.FC<OrderLookupModalProps> = ({ isOpen, onCl
                 </div>
               </div>
 
-              {/* Order Info Summary */}
+              {/* Real Order Details */}
               <div className="text-xs space-y-2.5 bg-[#12151c] p-3.5 rounded-xl border border-white/5 text-slate-300">
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Order Record:</span>
-                  <span className="font-semibold text-white">{trackedOrder.orderId}</span>
+                  <span className="text-slate-400">Customer:</span>
+                  <span className="font-semibold text-white">{foundOrder.customerName} ({foundOrder.mobile})</span>
                 </div>
-                {trackedOrder.customerName && trackedOrder.customerName !== 'Customer' && (
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Recipient:</span>
-                    <span className="font-semibold text-white">{trackedOrder.customerName} ({trackedOrder.mobile})</span>
-                  </div>
-                )}
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Items:</span>
-                  <span className="font-semibold text-amber-300 text-right">{trackedOrder.itemsSummary}</span>
+                  <span className="text-slate-400">Delivery Address:</span>
+                  <span className="font-semibold text-white">{foundOrder.address}, {foundOrder.district}</span>
                 </div>
-                {trackedOrder.grandTotal > 0 && (
-                  <div className="flex justify-between pt-1 border-t border-white/5">
-                    <span className="text-slate-400">Payment ({trackedOrder.paymentMethod}):</span>
-                    <span className="font-bold text-amber-400 font-mono-num">{formatPrice(trackedOrder.grandTotal)}</span>
-                  </div>
-                )}
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Estimated Delivery:</span>
+                  <span className="text-slate-400">Items Ordered:</span>
+                  <span className="font-semibold text-amber-300 text-right">{foundOrder.itemsSummary}</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-white/5">
+                  <span className="text-slate-400">Total Bill ({foundOrder.paymentMethod}):</span>
+                  <span className="font-bold text-amber-400 font-mono-num">{formatPrice(foundOrder.grandTotal)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Delivery Zone:</span>
                   <span className="text-emerald-400 font-semibold">
-                    {trackedOrder.deliveryZone === 'Inside Dhaka' ? '24–48 Hours' : '3–5 Days across Bangladesh'}
+                    {foundOrder.deliveryZone} ({foundOrder.deliveryZone === 'Inside Dhaka' ? '24–48 Hours' : '3–5 Days'})
                   </span>
                 </div>
               </div>
 
-              {/* Instant WhatsApp & Hotline Actions */}
+              {/* Instant WhatsApp Live Updates */}
               <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
                 <a
-                  href={`https://wa.me/${businessConfig.whatsappNumber}?text=${encodeURIComponent(
-                    `Hello Urban Thread BD! I placed an order with Order ID: ${trackedOrder.orderId}. Please share my current parcel delivery status.`
-                  )}`}
+                  href={createWhatsAppOrderLink(
+                    foundOrder.orderId,
+                    foundOrder.grandTotal,
+                    foundOrder.customerName
+                  )}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-full sm:flex-1 py-3 px-4 rounded-xl bg-[#25D366] hover:bg-[#20bd5a] text-black text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#25D366]/20 cursor-pointer"
                 >
                   <MessageCircle className="w-4 h-4 fill-black" />
-                  <span>Get Live Update on WhatsApp</span>
+                  <span>WhatsApp Live Support</span>
                 </a>
 
                 <a
@@ -235,10 +218,45 @@ export const OrderLookupModal: React.FC<OrderLookupModalProps> = ({ isOpen, onCl
                   className="w-full sm:w-auto py-3 px-4 rounded-xl bg-[#1f232d] hover:bg-[#282d3b] text-white text-xs font-semibold flex items-center justify-center gap-1.5 border border-white/10"
                 >
                   <Phone className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Call Hotline</span>
+                  <span>Call Helpline</span>
                 </a>
               </div>
 
+            </div>
+          )}
+
+          {/* REAL NOT FOUND STATE (When a random/fake ID or unrecorded order is entered) */}
+          {hasSearched && !isLoading && isNotFound && (
+            <div className="p-5 rounded-2xl bg-red-950/20 border border-red-500/30 space-y-4 animate-fadeIn">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-xl bg-red-500/10 text-red-400 shrink-0">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white">No Order Found for &quot;{searchTerm}&quot;</h4>
+                  <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                    We couldn&apos;t find any active order matching this ID or mobile number in our central database. Please verify the number from your order confirmation or invoice.
+                  </p>
+                </div>
+              </div>
+
+              {/* Instant WhatsApp Support to check manually */}
+              <div className="pt-2 border-t border-white/5 space-y-2">
+                <p className="text-[11px] text-slate-400">
+                  Did you place an order recently? Send your details to our team to locate your parcel:
+                </p>
+                <a
+                  href={`https://wa.me/${businessConfig.whatsappNumber}?text=${encodeURIComponent(
+                    `Hello Urban Thread BD! I cannot track my order with ID/Phone: "${searchTerm}". Please assist me in finding my order status.`
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 px-4 rounded-xl bg-[#25D366] hover:bg-[#20bd5a] text-black text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <MessageCircle className="w-4 h-4 fill-black" />
+                  <span>Contact Support on WhatsApp</span>
+                </a>
+              </div>
             </div>
           )}
 
