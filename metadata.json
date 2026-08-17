@@ -1,0 +1,7 @@
+{
+  "name": "Urban Thread BD | Everyday Fashion",
+  "description": "Modern, premium Bangladeshi clothing brand offering everyday menswear, womenswear, and seamless checkout with delivery across Bangladesh.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
