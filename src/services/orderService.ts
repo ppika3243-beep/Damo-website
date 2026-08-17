@@ -42,7 +42,31 @@ export async function submitOrderToGoogleSheet(
 
   const jsonString = JSON.stringify(bodyData);
 
-  // Strategy 1: Use server proxy `/api/submit-order` (bypasses browser CORS & redirects smoothly)
+  // Strategy 1: Direct POST with text/plain (Bypasses CORS preflight directly from any host including Netlify)
+  try {
+    const directResponse = await fetch(targetEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: jsonString,
+    });
+
+    if (directResponse.ok || directResponse.type === 'opaque') {
+      saveOrderLocally(payload, cartItems);
+      return {
+        success: true,
+        orderId: payload.orderId,
+        message: 'Your order has been received successfully.',
+        payload,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  } catch (directError) {
+    console.warn('Direct fetch attempt, trying fallback...', directError);
+  }
+
+  // Strategy 2: Proxy if running in local server mode
   try {
     const proxyResponse = await fetch('/api/submit-order', {
       method: 'POST',
@@ -66,34 +90,10 @@ export async function submitOrderToGoogleSheet(
       }
     }
   } catch (proxyError) {
-    console.warn('Server proxy order submission unavailable, trying direct connection...', proxyError);
+    console.warn('Server proxy unavailable, proceeding to no-cors mode...', proxyError);
   }
 
-  // Strategy 2: Direct POST with text/plain (avoids browser preflight OPTIONS while sending valid JSON string to Google Apps Script)
-  try {
-    const directResponse = await fetch(targetEndpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8',
-      },
-      body: jsonString,
-    });
-
-    if (directResponse.ok || directResponse.type === 'opaque') {
-      saveOrderLocally(payload, cartItems);
-      return {
-        success: true,
-        orderId: payload.orderId,
-        message: 'Your order has been received successfully.',
-        payload,
-        timestamp: new Date().toISOString(),
-      };
-    }
-  } catch (directError) {
-    console.warn('Direct text/plain fetch failed, attempting no-cors fallback...', directError);
-  }
-
-  // Strategy 3: Direct POST with no-cors mode (ensures browser does not block Google redirect)
+  // Strategy 3: Direct POST with no-cors mode (Universal fallback for client-only static hosting like Netlify)
   try {
     await fetch(targetEndpoint, {
       method: 'POST',
@@ -168,8 +168,89 @@ export function getStoredOrders(): StoredOrder[] {
   }
 }
 
-export function findStoredOrder(orderId: string): StoredOrder | undefined {
-  const cleanId = orderId.trim().toUpperCase();
+/**
+ * Enhanced flexible order search by Order ID (exact or partial) or Mobile Phone
+ */
+export function findStoredOrder(query: string): StoredOrder | undefined {
+  if (!query) return undefined;
+  const rawQuery = query.trim();
+  const cleanQuery = rawQuery.toUpperCase().replace(/^#/, '');
+  const digitsOnlyQuery = rawQuery.replace(/\D/g, '');
+
   const orders = getStoredOrders();
-  return orders.find((o) => o.orderId.toUpperCase() === cleanId);
+
+  // 1. Exact match on Order ID
+  const exactIdMatch = orders.find((o) => o.orderId.toUpperCase() === cleanQuery);
+  if (exactIdMatch) return exactIdMatch;
+
+  // 2. Match without 'UTBD-' prefix (e.g. searching '583567' for 'UTBD-583567')
+  const partialIdMatch = orders.find((o) => {
+    const idNum = o.orderId.replace(/\D/g, '');
+    return (
+      (digitsOnlyQuery.length >= 4 && idNum === digitsOnlyQuery) ||
+      o.orderId.toUpperCase() === `UTBD-${cleanQuery}`
+    );
+  });
+  if (partialIdMatch) return partialIdMatch;
+
+  // 3. Match by phone number
+  if (digitsOnlyQuery.length >= 7) {
+    const phoneMatch = orders.find((o) => {
+      const orderPhoneDigits = o.mobile.replace(/\D/g, '');
+      return (
+        orderPhoneDigits.includes(digitsOnlyQuery) ||
+        digitsOnlyQuery.includes(orderPhoneDigits)
+      );
+    });
+    if (phoneMatch) return phoneMatch;
+  }
+
+  return undefined;
+}
+
+/**
+ * Fetch live order details from remote Google Apps Script (Works across all devices including Netlify)
+ */
+export async function fetchRemoteOrder(query: string): Promise<StoredOrder | null> {
+  const cleanQuery = query.trim();
+  if (!cleanQuery) return null;
+
+  const targetEndpoint = `${businessConfig.orderApiEndpoint}?action=track&query=${encodeURIComponent(
+    cleanQuery
+  )}&orderId=${encodeURIComponent(cleanQuery)}`;
+
+  try {
+    const res = await fetch(targetEndpoint, {
+      method: 'GET',
+    });
+    if (res.ok) {
+      const dataText = await res.text();
+      try {
+        const json = JSON.parse(dataText);
+        if (json && json.orderId) {
+          const remoteOrder: StoredOrder = {
+            orderId: json.orderId,
+            customerName: json.customerName || 'Customer',
+            mobile: json.mobile || '',
+            itemsSummary: json.product || json.itemsSummary || 'Standard Order',
+            deliveryZone: json.deliveryZone || 'Inside Dhaka',
+            district: json.district || 'Dhaka',
+            address: json.address || 'Dhaka',
+            paymentMethod: json.paymentMethod || 'Cash on Delivery',
+            subtotal: Number(json.subtotal) || 0,
+            deliveryCharge: Number(json.deliveryCharge) || 70,
+            grandTotal: Number(json.grandTotal) || 0,
+            date: json.date || new Date().toISOString(),
+            orderStatus: json.orderStatus || 'Confirmed & Processing',
+            items: [],
+          };
+          return remoteOrder;
+        }
+      } catch {}
+    }
+  } catch (err) {
+    console.warn('Direct remote lookup check:', err);
+  }
+
+  return null;
 }
